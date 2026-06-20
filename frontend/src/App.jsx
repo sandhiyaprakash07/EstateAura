@@ -69,8 +69,54 @@ const DEFAULT_PROPERTIES = [
 // Admin email — only this account can access the Admin Dashboard
 const ADMIN_EMAILS = ["sandhiya150926@gmail.com"];
 
+const API_BASE = "https://estateaura-backend.onrender.com";
+
+const DEFAULT_IMAGE =
+  "https://images.unsplash.com/photo-1564013799919-ab600027ffc6?auto=format&fit=crop&w=800&q=80";
+
 const isAdminUser = (user) =>
   Boolean(user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase()));
+
+const normalizeDbProperty = (p) => {
+  const fallback = DEFAULT_PROPERTIES.find((d) => d.id === p.id) || {};
+  return {
+    ...fallback,
+    ...p,
+    title: p.title || fallback.title || "Property",
+    price: Number(p.price ?? fallback.price ?? 0),
+    location: p.location || fallback.location || "Chennai",
+    type: p.type || fallback.type || "Apartment",
+    description: p.description || fallback.description || "",
+    image: p.image || fallback.image || DEFAULT_IMAGE,
+    beds: p.beds ?? fallback.beds ?? 2,
+    baths: p.baths ?? fallback.baths ?? 2,
+    area: p.area || fallback.area || "1,200 sqft",
+    features: p.features || fallback.features || ["Wifi", "Security"],
+  };
+};
+
+const apiFetch = async (path, options = {}) => {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      const body = await res.json();
+      message = body.error || message;
+    } catch (_) {}
+    throw new Error(message);
+  }
+
+  if (res.status === 204) return null;
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+};
 
 function App() {
   // ==========================================
@@ -83,26 +129,9 @@ function App() {
   const [loginRedirect, setLoginRedirect] = useState(null); // Screen to redirect after login
 
   // ==========================================
-  // DATA MANAGEMENT STATES (WITH LOCAL SYNC)
+  // DATA MANAGEMENT STATES (BACKEND API)
   // ==========================================
   const [dbProperties, setDbProperties] = useState([]);
-  const [customProperties, setCustomProperties] = useState(() => {
-    const saved = localStorage.getItem("estateaura_custom_properties");
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [deletedIds, setDeletedIds] = useState(() => {
-    const saved = localStorage.getItem("estateaura_deleted_properties");
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [editedProperties, setEditedProperties] = useState(() => {
-    const saved = localStorage.getItem("estateaura_edited_properties");
-    return saved ? JSON.parse(saved) : {};
-  });
-
-  const [localInquiries, setLocalInquiries] = useState(() => {
-    const saved = localStorage.getItem("estateaura_local_inquiries");
-    return saved ? JSON.parse(saved) : [];
-  });
   const [dbInquiries, setDbInquiries] = useState([]);
 
   // ==========================================
@@ -219,12 +248,15 @@ function App() {
   const fetchPropertiesFromDB = async () => {
     try {
       setDbLoading(true);
-      const { data, error } = await supabase.from("properties").select("*");
-      if (error) throw error;
-      setDbProperties(data || []);
+      const data = await apiFetch("/properties");
+      if (Array.isArray(data) && data.length > 0) {
+        setDbProperties(data.map(normalizeDbProperty));
+      } else {
+        setDbProperties([]);
+      }
     } catch (err) {
-      console.warn("Could not load properties from Supabase, relying on seeds:", err.message);
-      setDbProperties([]); // Relying on fallback DEFAULT_PROPERTIES
+      console.warn("Could not load properties from backend:", err.message);
+      setDbProperties([]);
     } finally {
       setDbLoading(false);
     }
@@ -232,28 +264,19 @@ function App() {
 
   const fetchInquiriesFromDB = async () => {
     try {
-      const { data, error } = await supabase.from("inquiries").select("*");
-      if (error) throw error;
-      setDbInquiries(data || []);
+      const data = await apiFetch("/inquiries");
+      setDbInquiries(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.warn("Could not load inquiries from Supabase:", err.message);
+      console.warn("Could not load inquiries from backend:", err.message);
+      setDbInquiries([]);
     }
   };
 
   // ==========================================
-  // DATA HARMONIZATION (MERGE DB & LOCALSTORAGE)
+  // DATA FROM BACKEND API
   // ==========================================
-  // Merge Supabase properties + custom properties, filter deleted, map edits
-  const allBaseProperties = dbProperties.length > 0 ? dbProperties : DEFAULT_PROPERTIES;
-  
-  const properties = [
-    ...allBaseProperties,
-    ...customProperties
-  ].filter(p => !deletedIds.includes(Number(p.id)) && !deletedIds.includes(p.id))
-   .map(p => editedProperties[p.id] ? { ...p, ...editedProperties[p.id] } : p);
-
-  // Combine DB inquiries and Local storage inquiries
-  const inquiries = [...dbInquiries, ...localInquiries];
+  const properties = dbProperties.length > 0 ? dbProperties : DEFAULT_PROPERTIES;
+  const inquiries = dbInquiries;
 
   // Unique list of locations for filters
   const locationsList = ["All", ...new Set(properties.map(p => p.location))];
@@ -262,8 +285,9 @@ function App() {
   // PROPERTY FILTERS LOGIC
   // ==========================================
   const filteredProperties = properties.filter(p => {
+    const desc = (p.description || "").toLowerCase();
     const matchSearch = p.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                        p.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                        desc.includes(searchQuery.toLowerCase()) ||
                         p.location.toLowerCase().includes(searchQuery.toLowerCase());
     const matchType = selectedType === "All" || p.type === selectedType;
     const matchLocation = selectedLocation === "All" || p.location === selectedLocation;
@@ -333,25 +357,16 @@ function App() {
     };
 
     try {
-      // Attempt to save to Supabase
-      const { error } = await supabase.from("inquiries").insert([newInquiry]);
-      if (error) throw error;
-      
+      await apiFetch("/inquiries", {
+        method: "POST",
+        body: JSON.stringify(newInquiry),
+      });
+
       triggerToast("Inquiry submitted successfully!");
-      fetchInquiriesFromDB();
+      await fetchInquiriesFromDB();
       setInquirySuccess(true);
     } catch (err) {
-      console.warn("Supabase insert failed. Saving inquiry to localStorage fallback.", err.message);
-      // Fallback: save to Local Storage
-      const updatedInquiries = [
-        ...localInquiries,
-        { id: 'local_' + Date.now(), ...newInquiry }
-      ];
-      setLocalInquiries(updatedInquiries);
-      localStorage.setItem("estateaura_local_inquiries", JSON.stringify(updatedInquiries));
-      
-      triggerToast("Inquiry saved locally (Database fallback active)");
-      setInquirySuccess(true);
+      triggerToast(err.message || "Failed to submit inquiry", "error");
     } finally {
       setSubmittingInquiry(false);
     }
@@ -484,57 +499,57 @@ function App() {
     };
 
     if (editingPropertyId) {
-      // Edit mode
-      const updatedEdits = {
-        ...editedProperties,
-        [editingPropertyId]: newPropertyData
-      };
-      setEditedProperties(updatedEdits);
-      localStorage.setItem("estateaura_edited_properties", JSON.stringify(updatedEdits));
-      triggerToast("Property updated successfully!");
+      try {
+        await apiFetch(`/properties/${editingPropertyId}`, {
+          method: "PUT",
+          body: JSON.stringify(newPropertyData),
+        });
+        triggerToast("Property updated successfully!");
+        await fetchPropertiesFromDB();
+        setShowAddModal(false);
+      } catch (err) {
+        triggerToast(err.message || "Failed to update property", "error");
+      }
     } else {
-      // Add mode
-      const newId = 'custom_' + Date.now();
-      const createdProp = { id: newId, ...newPropertyData };
-      const updatedCustom = [...customProperties, createdProp];
-      setCustomProperties(updatedCustom);
-      localStorage.setItem("estateaura_custom_properties", JSON.stringify(updatedCustom));
-      triggerToast("Property added successfully!");
-    }
-    
-    setShowAddModal(false);
-  };
-
-  const deleteProperty = (id) => {
-    if (!isAdminUser(currentUser)) return;
-    if (confirm("Are you sure you want to delete this property?")) {
-      const updatedDeleted = [...deletedIds, id];
-      setDeletedIds(updatedDeleted);
-      localStorage.setItem("estateaura_deleted_properties", JSON.stringify(updatedDeleted));
-      triggerToast("Property deleted", "info");
-      
-      // If we are currently viewing the deleted property details, go back to explore
-      if (selectedProperty && selectedProperty.id === id) {
-        setSelectedProperty(null);
-        setCurrentScreen("explore");
+      try {
+        await apiFetch("/properties", {
+          method: "POST",
+          body: JSON.stringify(newPropertyData),
+        });
+        triggerToast("Property added successfully!");
+        await fetchPropertiesFromDB();
+        setShowAddModal(false);
+      } catch (err) {
+        triggerToast(err.message || "Failed to add property", "error");
       }
     }
   };
 
-  const resolveInquiry = (inqId) => {
-    // If it's a local inquiry, filter it out
-    if (String(inqId).startsWith("local_")) {
-      const updated = localInquiries.filter(i => i.id !== inqId);
-      setLocalInquiries(updated);
-      localStorage.setItem("estateaura_local_inquiries", JSON.stringify(updated));
+  const deleteProperty = async (id) => {
+    if (!isAdminUser(currentUser)) return;
+    if (!confirm("Are you sure you want to delete this property?")) return;
+
+    try {
+      await apiFetch(`/properties/${id}`, { method: "DELETE" });
+      await fetchPropertiesFromDB();
+      triggerToast("Property deleted", "info");
+
+      if (selectedProperty && selectedProperty.id === id) {
+        setSelectedProperty(null);
+        setCurrentScreen("explore");
+      }
+    } catch (err) {
+      triggerToast(err.message || "Failed to delete property", "error");
+    }
+  };
+
+  const resolveInquiry = async (inqId) => {
+    try {
+      await apiFetch(`/inquiries/${inqId}`, { method: "DELETE" });
+      await fetchInquiriesFromDB();
       triggerToast("Inquiry marked as resolved");
-    } else {
-      // For DB inquiries, mock resolution by filtering from UI (or delete query if RLS allows)
-      // Since delete might be blocked, we filter it locally and show a mock success
-      const updatedLocalInq = [...localInquiries, { id: 'resolved_' + inqId }];
-      // Filter out from local display state
-      setDbInquiries(prev => prev.filter(i => i.id !== inqId));
-      triggerToast("Inquiry marked as resolved (DB archived)");
+    } catch (err) {
+      triggerToast(err.message || "Failed to resolve inquiry", "error");
     }
   };
 
