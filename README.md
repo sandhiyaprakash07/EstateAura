@@ -15,6 +15,18 @@ https://estateaura-new.onrender.com
 - User Login
 - Admin Panel
 
+  <img width="412" height="375" alt="image" src="https://github.com/user-attachments/assets/d61e7c43-348e-4436-990e-3e7c5e84da76" />
+
+  🔐 Admin Access
+
+This project includes an admin-based login system.
+
+Only the admin can log in to access full features.
+Admin credentials are restricted and not publicly available for security reasons.
+
+⚠️ Note: If you would like to test the application, please contact me for demo access or a walkthrough.
+
+
 
 
   
