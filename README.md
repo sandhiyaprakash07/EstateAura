@@ -26,6 +26,8 @@ Admin credentials are restricted and not publicly available for security reasons
 
 ⚠️ Note: If you would like to test the application, please contact me for demo access or a walkthrough.
 
+This website is converted into a Progressive Web App (PWA).
+
 
 
 
